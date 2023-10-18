@@ -112,6 +112,26 @@ spec:
     port: 80
     targetPort: 5000
 
+# Internal load balancer for analytics-server
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: analytics-tools-service
+  labels:
+    app: graphcache
+  annotations:
+    networking.gke.io/load-balancer-type: "Internal"
+    cloud.google.com/backend-config: '{"default": "stick-service-backend-cfg"}'
+spec:
+  type: LoadBalancer
+  selector:
+    tier: analytics-tools
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 5000
+
 # Deployes a replica set of independently synced graphcache servers 
 ---
 apiVersion: apps/v1
@@ -442,3 +462,33 @@ spec:
           initialDelaySeconds: 3
           periodSeconds: 3
           failureThreshold: 3
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics-tools
+  labels:
+    app: analytics-tools
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: analytics-tools
+  template:
+    metadata:
+      labels:
+        app: analytics-tools
+    spec:
+      containers:
+      - name: crocswap-analytics-tools-container
+        image: us-central1-docker.pkg.dev/crocswap/crocswap-audit-tools-master/crocswap_audit_tools:latest # Make sure this is the correct image name and tag
+        command: ["python3", "run_server.py"] # Will start the actual server inside
+        ports:
+        - containerPort: 8080 # Adjust the port as needed
+
+        resources:
+          requests: 
+            cpu: "4000m"
+            memory: "2Gi"
+          limits:
+            memory: "2Gi"
