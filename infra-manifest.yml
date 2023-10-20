@@ -1,0 +1,297 @@
+# TODO: ADD SSL CERTS
+# TODO: ADD PUBLIC FACING GATEWAY
+
+# GCGO SERVER
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: graphcache-go-deployment
+  labels:
+    app: graphcache-go
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: graphcache-go
+  template:
+    metadata:
+      labels:
+        app: graphcache-go
+    spec:
+      containers:
+        - name: graphcache-go
+          image: cadehypotenuse/graphcache-go:latest
+          ports:
+            - containerPort: 8080 # Adjust the port if your application listens on a different one
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: graphcache-go-service
+spec:
+  selector:
+    app: graphcache-go
+  ports:
+    - protocol: TCP
+      port: 80 # The port the service listens on
+      targetPort: 8080 # The port the application inside the container listens on
+  type: LoadBalancer # Exposes the Service externally using a cloud provider's load balancer
+
+# ANALYTICS TOOLS
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics-tools
+  labels:
+    app: analytics-tools
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: analytics-tools
+  template:
+    metadata:
+      labels:
+        app: analytics-tools
+    spec:
+      containers:
+        - name: crocswap-analytics-tools-container
+          image: cadehypotenuse/crocswap_audit_tools:latest # Make sure this is the correct image name and tag
+          command: ["python3", "run_server.py"] # Will start the actual server inside
+          ports:
+            - containerPort: 8080 # Adjust the port as needed
+          # TODO: Understand ramifications of setting resource limits
+          # Commented out as it lead to a unschedulable pod
+          # resources:
+          #   requests:
+          #     cpu: "4000m"
+          #     memory: "2Gi"
+          #   limits:
+          #     memory: "2Gi"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: analytics-tools-service
+spec:
+  selector:
+    app: analytics-tools
+  ports:
+    - protocol: TCP
+      port: 80 # The port the service listens on
+      targetPort: 8080 # The port the application inside the container listens on
+  type: LoadBalancer # Exposes the Service externally using a cloud provider's load balancer
+
+# GCGO CANDLES
+# ---
+# apiVersion: apps/v1
+# kind: Deployment
+# metadata:
+#   name: graphcache-go-candles-deployment
+#   labels:
+#     app: graphcache-go-candles
+# spec:
+#   replicas: 1
+#   selector:
+#     matchLabels:
+#       app: graphcache-go-candles
+#   template:
+#     metadata:
+#       labels:
+#         app: graphcache-go-candles
+#     spec:
+#       containers:
+#         - name: graphcache-go-candles
+#           image: cadehypotenuse/graphcache-go-candles:latest
+#           ports:
+#             - containerPort: 8080 # Adjust the port if your application listens on a different one
+
+#           volumeMounts:
+#             # - name: shards-volume
+#             #   mountPath: /app/db/shards
+#             - name: gcs-credentials
+#               mountPath: /app/GCS_credentials.json
+#               subPath: GCS_credentials.json
+
+#           env:
+#             - name: UNISWAP_CANDLES
+#               value: "true"
+#             - name: UNISWAP_DAYS_OF_CANDLES_BEFORE_SERVER_READY
+#               value: "30"
+#             - name: UNISWAP_HOUR_TO_SYNC_SHARDS
+#               value: "1"
+#             - name: UNISWAP_GCS_BUCKET_NAME
+#               value: "gcgo-swap-shards"
+#             - name: UNISWAP_SHARDS_PATH
+#               value: "./db/shards"
+#             - name: UNISWAP_PATH_TO_GCS_CREDENTIALS
+#               value: "./GCS_credentials.json"
+#             - name: ENABLE_MAD_FILTER
+#               value: "true"
+#             - name: MAD_WINDOW_SIZE
+#               value: "10"
+#             - name: MEV_THRESHOLD
+#               value: "8"
+#       volumes:
+#         # - name: shards-volume
+#         #   hostPath:
+#         #     path: /path/on/host/shards
+#         - name: gcs-credentials
+#           secret:
+#             secretName: gcs-credentials
+#             items:
+#               - key: GCS_credentials.json
+#                 path: GCS_credentials.json
+# ---
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: graphcache-go-candles-service
+# spec:
+#   selector:
+#     app: graphcache-go-candles
+#   ports:
+#     - protocol: TCP
+#       port: 80 # The port the service listens on
+#       targetPort: 8080 # The port the application inside the container listens on
+#   type: LoadBalancer # Exposes the Service externally using a cloud provider's load balancer
+
+# # RPC CACHE
+# # Deploys a replica set of rpc-cache servers
+# ---
+# apiVersion: apps/v1
+# kind: Deployment
+# metadata:
+#   name: rpc-cache-deployment
+#   labels:
+#     app: graphcache
+# spec:
+#   replicas: 2
+#   selector:
+#     matchLabels:
+#       tier: rpc-servers
+#   template:
+#     metadata:
+#       labels:
+#         tier: rpc-servers
+#     spec:
+#       containers:
+#         # Each replicate runs an instance of the rpc-cache server and an attached redis
+#         # instance for caching
+#         - name: graphcache
+#           image: us-central1-docker.pkg.dev/ambient-app-384603/graphcache/graphcache:latest
+#           command:
+#             [
+#               "python3",
+#               "-u",
+#               "/app/webserver/rpcserver.py",
+#               "--redis-host",
+#               "localhost",
+#             ]
+#           ports:
+#             - containerPort: 4999
+#           resources:
+#             requests:
+#               cpu: "4000m"
+#               memory: "2Gi"
+#             limits:
+#               memory: "2Gi"
+
+#           # Uses the latest_block endpoint on the graphcache server as a liveness and startup
+#           # probe. If this endpoint changes or is no longer indicative of server readiness
+#           # this probe needs to be updated
+#           livenessProbe:
+#             httpGet:
+#               path: "/ping"
+#               port: 5001
+#             initialDelaySeconds: 3
+#             periodSeconds: 3
+#             failureThreshold: 3
+
+#         - name: nginx-proxy
+#           # modified to use dockerhub
+#           image: nginxproxy/nginx-proxy:latest
+#           ports:
+#             - containerPort: 5000
+#           resources:
+#             requests:
+#               cpu: "250m"
+#               memory: "500Mi"
+#             limits:
+#               memory: "2Gi"
+
+#         - name: redis
+#           # modified to use dockerhub
+#           image: redis:latest
+#           ports:
+#             - containerPort: 6379
+#           resources:
+#             requests:
+#               cpu: "600m"
+#               memory: "12Gi"
+#             limits:
+#               memory: "16Gi"
+#         # TODO: add load balancer
+
+# # CHAT SERVER
+# ---
+# apiVersion: apps/v1
+# kind: Deployment
+# metadata:
+#   name: chat-server-deployment
+#   labels:
+#     app: graphcache
+# spec:
+#   # The websocket library of the chat server does requires session afinity (which the
+#   # current ingress doesn't support). Therefore we can only one 1 replica at a time,
+#   # any more will break client. For current chat workloads this should be sufficient.
+#   replicas: 1
+#   selector:
+#     matchLabels:
+#       tier: chat-servers
+#   template:
+#     metadata:
+#       labels:
+#         tier: chat-servers
+#     spec:
+#       containers:
+#         - name: chat-server
+#           image: us-central1-docker.pkg.dev/ambient-app-384603/graphcache/chat-server:latest
+#           ports:
+#             - containerPort: 5000
+
+#           resources:
+#             requests:
+#               cpu: "4000m"
+#               memory: "2Gi"
+#             limits:
+#               memory: "2Gi"
+
+#           env:
+#             - name: PROTOCOL
+#               value: "http"
+#             - name: PORT
+#               value: "5000"
+#             - name: MONGO_USER
+#               value: "chat-server"
+#             - name: MONGO_SERVER
+#               value: "serverlessinstance0.swuv52l.mongodb.net"
+#             - name: MONGO_PWD
+#               valueFrom:
+#                 secretKeyRef:
+#                   name: mongo-creds
+#                   key: mongo-pwd
+
+#           livenessProbe:
+#             httpGet:
+#               path: "/chat/api/status"
+#               port: 5000
+#             initialDelaySeconds: 3
+#             periodSeconds: 3
+#             failureThreshold: 3
+
