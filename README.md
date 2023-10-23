@@ -9,7 +9,11 @@ gcloud auth login
 gcloud config set project YOUR_PROJECT_ID
 gcloud container clusters create my-cluster --zone us-central1-a
 gcloud container clusters list
+gcloud container clusters get-credentials autopilot-cluster-1 --zone us-central1
+
+Then to test:
 kubectl apply -f manifest-staging.yml --dry-run=server
+To deploy:
 kubectl apply -f manifest-staging.yml
 
 kubectl config set-cluster autopilot-cluster-1 --server=https://34.27.182.147:6443 --insecure-skip-tls-verify=true
@@ -32,3 +36,8 @@ redis ngnix
 
 docker pull redis:latest
 docker pull nginx:latest
+
+
+
+kubectl apply -f secrets-analytic-tools.yml
+kubectl apply -f infra-manifest.yml

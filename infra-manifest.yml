@@ -72,6 +72,9 @@ spec:
           #     memory: "2Gi"
           #   limits:
           #     memory: "2Gi"
+          envFrom:
+            - configMapRef:    # Reference the ConfigMap here
+                name: secrets-analytic-tools
 
 ---
 apiVersion: v1
@@ -82,7 +85,7 @@ spec:
   selector:
     app: analytics-tools
   ports:
-    - protocol: TCP
+    - protocol: http
       port: 80 # The port the service listens on
       targetPort: 8080 # The port the application inside the container listens on
   type: LoadBalancer # Exposes the Service externally using a cloud provider's load balancer
