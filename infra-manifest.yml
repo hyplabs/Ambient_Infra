@@ -25,6 +25,7 @@ spec:
           ports:
             - containerPort: 8080 # Adjust the port if your application listens on a different one
 
+#load balancer settings
 ---
 apiVersion: v1
 kind: Service
@@ -73,9 +74,10 @@ spec:
           #   limits:
           #     memory: "2Gi"
           envFrom:
-            - configMapRef:    # Reference the ConfigMap here
+            - secretRef:
                 name: secrets-analytic-tools
 
+#load balancer settings
 ---
 apiVersion: v1
 kind: Service
@@ -113,9 +115,10 @@ spec:
           ports:
             - containerPort: 8080 # Adjust the port if your application listens on a different one
           envFrom:
-            - configMapRef:    # Reference the ConfigMap here
+            - secretRef:    # Reference the ConfigMap here
                 name: env-gcgo-candles
 
+#load balancer settings
 ---
 apiVersion: v1
 kind: Service
@@ -130,61 +133,79 @@ spec:
       targetPort: 8080 # The port the application inside the container listens on
   type: LoadBalancer # Exposes the Service externally using a cloud provider's load balancer
 
+# CHAT SERVER
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chat-server-deployment
+  labels:
+    app: graphcache
+spec:
+  # The websocket library of the chat server does requires session afinity (which the
+  # current ingress doesn't support). Therefore we can only one 1 replica at a time,
+  # any more will break client. For current chat workloads this should be sufficient.
+  replicas: 1
+  selector:
+    matchLabels:
+      tier: chat-servers
+  template:
+    metadata:
+      labels:
+        tier: chat-servers
+    spec:
+      containers:
+      - name: chat-server
+        image: anasonmania/express-test:latest
+        ports:
+        - containerPort: 5000
+        # resources:
+        #   requests:
+        #     cpu: "4000m"
+        #     memory: "2Gi"
+        #   limits:
+        #     memory: "2Gi"
+        # env:
+        # - name: PROTOCOL
+        #   value: "http"
+        # - name: PORT
+        #   value: "5000"
+        # - name: MONGO_USER
+        #   value: "chat-server"
+        # - name: MONGO_SERVER
+        #   value: "serverlessinstance0.swuv52l.mongodb.net"
+        # - name: MONGO_PWD
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: mongo-creds
+        #       key: mongo-pwd
+        livenessProbe:
+          httpGet:
+            path: "/chat/api/status"
+            port: 5000
+          initialDelaySeconds: 3
+          periodSeconds: 3
+          failureThreshold: 3
+        envFrom:
+          - secretRef:
+              name: secrets-analytic-tools
 
-# # CHAT SERVER
-# ---
-# apiVersion: apps/v1
-# kind: Deployment
-# metadata:
-#   name: chat-server-deployment
-#   labels:
-#     app: graphcache
-# spec:
-#   # The websocket library of the chat server does requires session afinity (which the
-#   # current ingress doesn't support). Therefore we can only one 1 replica at a time,
-#   # any more will break client. For current chat workloads this should be sufficient.
-#   replicas: 1
-#   selector:
-#     matchLabels:
-#       tier: chat-servers
-#   template:
-#     metadata:
-#       labels:
-#         tier: chat-servers
-#     spec:
-#       containers:
-#         - name: chat-server
-#           image: us-central1-docker.pkg.dev/ambient-app-384603/graphcache/chat-server:latest
-#           ports:
-#             - containerPort: 5000
-
-#           resources:
-#             requests:
-#               cpu: "4000m"
-#               memory: "2Gi"
-#             limits:
-#               memory: "2Gi"
-
-#           env:
-#             - name: PROTOCOL
-#               value: "http"
-#             - name: PORT
-#               value: "5000"
-#             - name: MONGO_USER
-#               value: "chat-server"
-#             - name: MONGO_SERVER
-#               value: "serverlessinstance0.swuv52l.mongodb.net"
-#             - name: MONGO_PWD
-#               valueFrom:
-#                 secretKeyRef:
-#                   name: mongo-creds
-#                   key: mongo-pwd
-
-#           livenessProbe:
-#             httpGet:
-#               path: "/chat/api/status"
-#               port: 5000
-#             initialDelaySeconds: 3
-#             periodSeconds: 3
-#             failureThreshold: 3
-
+#load balancer settings
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chat-service
+  labels:
+    app: graphcache
+  annotations:
+    networking.gke.io/load-balancer-type: "Internal"
+    cloud.google.com/backend-config: '{"default": "stick-service-backend-cfg"}'
+spec:
+  type: LoadBalancer
+  selector:
+    tier: chat-servers
+  ports:
+  - name: http
+    port: 80
+    targetPort: 5000
