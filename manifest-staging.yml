@@ -1,0 +1,494 @@
+# Google managed SSL certificate for the domain
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: managed-cert-prod
+  labels:
+    app: graphcache
+spec:
+  domains:
+    - ambindexer.net
+
+# Public facing gateway that ultimately routes to graphcache servers
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: graphcache-ingress
+  labels:
+    app: graphcache
+  annotations:
+    kubernetes.io/ingress.global-static-ip-name: ambient-backend-prod-ip
+    networking.gke.io/managed-certificates: managed-cert-prod
+    kubernetes.io/ingress.class: "gce"
+spec:
+  rules:
+    - host: ambindexer.net
+      http: 
+        paths:
+        - pathType: Prefix
+          path: "/"
+          backend:
+            service:
+              name: graphcache-service
+              port:
+                number: 80
+        - path: "/chat/*"
+          pathType: ImplementationSpecific
+          backend:
+            service:
+              name: chat-service
+              port:
+                number: 80
+
+# Session affinity necessary to support web sockets and user intention position
+# hinting
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: stick-service-backend-cfg
+spec:
+  sessionAffinity:
+    affinityType: "CLIENT_IP"  
+
+# Load balancer to any graphcache servers in deployment that are fully synced
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: graphcache-service
+  labels:
+    app: graphcache
+  annotations:
+    networking.gke.io/load-balancer-type: "Internal"
+    cloud.google.com/backend-config: '{"default": "stick-service-backend-cfg"}'
+spec:
+  type: LoadBalancer
+  selector:
+    tier: servers
+  ports:
+  - name: http
+    port: 80
+    targetPort: 5000
+
+# Internal load balancer for rpc-cache service
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rpc-cache-service
+  labels:
+    app: graphcache
+  annotations:
+    networking.gke.io/load-balancer-type: "Internal"
+spec:
+  type: LoadBalancer
+  selector:
+    tier: rpc-servers
+  ports:
+  - name: http
+    port: 80
+    targetPort: 5000
+
+# Internal load balancer for chat-server
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chat-service
+  labels:
+    app: graphcache
+  annotations:
+    networking.gke.io/load-balancer-type: "Internal"
+    cloud.google.com/backend-config: '{"default": "stick-service-backend-cfg"}'
+spec:
+  type: LoadBalancer
+  selector:
+    tier: chat-servers
+  ports:
+  - name: http
+    port: 80
+    targetPort: 5000
+
+# Internal load balancer for analytics-server
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: analytics-tools-service
+  labels:
+    app: graphcache
+  annotations:
+    networking.gke.io/load-balancer-type: "Internal"
+    cloud.google.com/backend-config: '{"default": "stick-service-backend-cfg"}'
+spec:
+  type: LoadBalancer
+  selector:
+    tier: analytics-tools
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 5000
+
+# Deployes a replica set of independently synced graphcache servers 
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: server-deployment
+  labels:
+    app: graphcache
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      tier: servers
+  template:
+    metadata:
+      labels:
+        tier: servers
+    spec:        
+      containers:
+
+      # Each replicate runs an instance of the graphcache server and an attached redis
+      # instance for caching
+      - name: graphcache
+        image: us-central1-docker.pkg.dev/ambient-app-384603/graphcache/graphcache:latest
+        args: 
+        - '--skip-initial-candles'
+        - '--skip-initial-pool-stats'
+        - '--skip-initial-states'
+        - '--skip-pruning'
+        - '--suppress-output'
+        - '--redis-host'
+        - 'localhost'
+        - '--db-location'
+        - '/data'
+        ports: 
+        - containerPort: 5001
+        - containerPort: 5002
+        - containerPort: 5003
+        - containerPort: 5004
+        - containerPort: 5005
+        resources:
+          requests: 
+            cpu: "2000m"
+            memory: "14Gi"
+
+        volumeMounts:
+        - name: google-cloud-key
+          mountPath: /var/secrets/google
+        - name: graphcache-data-vol
+          mountPath: /data/
+
+        env:
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /var/secrets/google/gcloud-creds.json
+        - name: GRAPHCACHE_CLOUD_ENV
+          value: gcloud
+        - name: GRAPHCACHE_RPC_CACHE_URL
+          value: http://rpc-cache-service
+        
+        # Uses the latest_block endpoint on the graphcache server as a liveness and startup
+        # probe. If this endpoint changes or is no longer indicative of server readiness
+        # this probe needs to be updated
+        livenessProbe:
+          httpGet:
+            path: '/latest_block?chainId=0x1'
+            port: 5001
+          initialDelaySeconds: 3
+          periodSeconds: 3
+          timeoutSeconds: 5
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: '/latest_block?chainId=0x1'
+            port: 5001
+          failureThreshold: 30 # 30 minute deadline to complete startup sync
+          periodSeconds: 60
+
+      - name: nginx-proxy
+        image: us-central1-docker.pkg.dev/ambient-app-384603/graphcache/nginx-proxy:latest
+        ports:
+        - containerPort: 5000
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "2Gi"
+          
+      - name: redis
+        image: us-central1-docker.pkg.dev/ambient-app-384603/graphcache/redis:latest
+        ports:
+        - containerPort: 6379
+        resources:
+          requests: 
+            cpu: "600m"
+            memory: "14Gi"
+
+      # Expects a secret set for a GCP service account with the necessary permissions
+      # for the graphcache workload (i.e. read/write access to the snapshot GCP bucket)
+      volumes:
+      - name: google-cloud-key
+        secret: 
+          secretName: gcloud-creds
+
+      # Use ephemeral volume claim, because GKE autopilot only supports 10GB of storage
+      # natively in the cluster
+      - name: graphcache-data-vol
+        ephemeral:
+          volumeClaimTemplate:
+            spec:
+              accessModes: [ "ReadWriteOnce" ]
+              resources:
+                requests:
+                  storage: 100Gi
+
+
+# Very similar to to the deployment pattern, but difference is instead of starting
+# a public facing server, runs the graphcache in snapshot mode. Point of this cronjob
+# is to periodically update a recent snapshot in the GCS bucket, so new starting
+# graphcache instances have short sync time
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: sqlite-snapshot
+  labels:
+    app: graphcache
+
+spec:
+  # Syncs every 4 hours
+  schedule: "0 */4 * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    metadata:
+      labels:
+        tier: workers
+    spec:
+      completions: 1
+      template:
+
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: graphcache
+            image: us-central1-docker.pkg.dev/ambient-app-384603/graphcache/graphcache:latest
+
+            # Unlike a graphcache server, this doesn't include any skip flags, because the
+            # goal is to produce a full database file
+            args:
+            - '--snapshot-run'
+            - '--suppress-output'
+            - '--redis-host'
+            - 'localhost'
+            - '--db-location'
+            - '/data'
+            ports: 
+            - containerPort: 5001
+
+            # Provision significantly less CPU, because this isn't serving requests
+            resources:
+              requests: 
+                cpu: "1400m"
+                memory: "12Gi"
+              limits:
+                memory: "16Gi"
+            
+            volumeMounts:
+            - name: google-cloud-key
+              mountPath: /var/secrets/google
+            - name: graphcache-data-vol
+              mountPath: /data/
+
+            env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/secrets/google/gcloud-creds.json
+            - name: GRAPHCACHE_CLOUD_ENV
+              value: gcloud
+            - name: GRAPHCACHE_RPC_CACHE_URL
+              value: http://rpc-cache-service
+
+          - name: redis
+            image: us-central1-docker.pkg.dev/ambient-app-384603/graphcache/redis:latest
+            ports:
+            - containerPort: 6379
+            resources:
+              requests: 
+                cpu: "400m"
+                memory: "16Gi"
+              limits:
+                memory: "16Gi"
+
+          # Expects a secret set for a GCP service account with the necessary permissions
+          # for the graphcache workload (i.e. read/write access to the snapshot GCP bucket)
+          volumes:
+          - name: google-cloud-key
+            secret:
+              secretName: gcloud-creds
+
+        # Use ephemeral volume claim, because GKE autopilot only supports 10GB of storage
+        # natively in the cluster
+          - name: graphcache-data-vol
+            ephemeral:
+              volumeClaimTemplate:
+                spec:
+                  accessModes: [ "ReadWriteOnce" ]
+                  resources:
+                    requests:
+                      storage: 100Gi
+
+# Deployes a replica set of rpc-cache servers
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rpc-cache-deployment
+  labels:
+    app: graphcache
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      tier: rpc-servers
+  template:
+    metadata:
+      labels:
+        tier: rpc-servers
+    spec:        
+      containers:
+
+      # Each replicate runs an instance of the rpc-cache server and an attached redis
+      # instance for caching
+      - name: graphcache
+        image: us-central1-docker.pkg.dev/ambient-app-384603/graphcache/graphcache:latest
+        command: ["python3", "-u", "/app/webserver/rpcserver.py", "--redis-host", "localhost"]
+        ports: 
+        - containerPort: 4999
+        resources:
+          requests: 
+            cpu: "4000m"
+            memory: "2Gi"
+          limits:
+            memory: "2Gi"
+        
+        # Uses the latest_block endpoint on the graphcache server as a liveness and startup
+        # probe. If this endpoint changes or is no longer indicative of server readiness
+        # this probe needs to be updated
+        livenessProbe:
+          httpGet:
+            path: '/ping'
+            port: 5001
+          initialDelaySeconds: 3
+          periodSeconds: 3
+          failureThreshold: 3
+
+      - name: nginx-proxy
+        image: us-central1-docker.pkg.dev/ambient-app-384603/graphcache/nginx-proxy:latest
+        ports:
+        - containerPort: 5000
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "500Mi"
+          limits:
+            memory: "2Gi"
+          
+      - name: redis
+        image: us-central1-docker.pkg.dev/ambient-app-384603/graphcache/redis:latest
+        ports:
+        - containerPort: 6379
+        resources:
+          requests: 
+            cpu: "600m"
+            memory: "12Gi"
+          limits:
+            memory: "16Gi"
+
+# Deployes a replica set of rpc-cache servers 
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chat-server-deployment
+  labels:
+    app: graphcache
+spec:
+  # The websocket library of the chat server does requires session afinity (which the
+  # current ingress doesn't support). Therefore we can only one 1 replica at a time,
+  # any more will break client. For current chat workloads this should be sufficient.
+  replicas: 1
+  selector:
+    matchLabels:
+      tier: chat-servers
+  template:
+    metadata:
+      labels:
+        tier: chat-servers
+    spec:        
+      containers:
+      - name: chat-server
+        image: us-central1-docker.pkg.dev/ambient-app-384603/graphcache/chat-server:latest 
+        ports: 
+        - containerPort: 5000
+
+        resources:
+          requests: 
+            cpu: "4000m"
+            memory: "2Gi"
+          limits:
+            memory: "2Gi"
+
+        env:
+        - name: PROTOCOL
+          value: "http"
+        - name: PORT
+          value: "5000"
+        - name: MONGO_USER
+          value: "chat-server" 
+        - name: MONGO_SERVER
+          value: "serverlessinstance0.swuv52l.mongodb.net"
+        - name: MONGO_PWD
+          valueFrom:
+            secretKeyRef:
+              name: mongo-creds
+              key: mongo-pwd
+
+        livenessProbe:
+          httpGet:
+            path: '/chat/api/status'
+            port: 5000
+          initialDelaySeconds: 3
+          periodSeconds: 3
+          failureThreshold: 3
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics-tools
+  labels:
+    app: analytics-tools
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: analytics-tools
+  template:
+    metadata:
+      labels:
+        app: analytics-tools
+    spec:
+      containers:
+      - name: crocswap-analytics-tools-container
+        image: us-central1-docker.pkg.dev/crocswap/crocswap-audit-tools-master/crocswap_audit_tools:latest # Make sure this is the correct image name and tag
+        command: ["python3", "run_server.py"] # Will start the actual server inside
+        ports:
+        - containerPort: 8080 # Adjust the port as needed
+
+        resources:
+          requests: 
+            cpu: "4000m"
+            memory: "2Gi"
+          limits:
+            memory: "2Gi"
