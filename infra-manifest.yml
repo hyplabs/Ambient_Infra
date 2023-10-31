@@ -156,7 +156,7 @@ spec:
     spec:
       containers:
       - name: chat-server
-        image: anasonmania/express-test:latest
+        image: anasonmania/express-test:test
         ports:
         - containerPort: 5000
         # resources:
