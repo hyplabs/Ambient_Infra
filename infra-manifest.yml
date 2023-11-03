@@ -156,56 +156,34 @@ spec:
     spec:
       containers:
       - name: chat-server
-        image: anasonmania/express-test:test
+        image: anasonmania/express-test:latest
         ports:
-        - containerPort: 5000
-        # resources:
-        #   requests:
-        #     cpu: "4000m"
-        #     memory: "2Gi"
-        #   limits:
-        #     memory: "2Gi"
-        # env:
-        # - name: PROTOCOL
-        #   value: "http"
-        # - name: PORT
-        #   value: "5000"
-        # - name: MONGO_USER
-        #   value: "chat-server"
-        # - name: MONGO_SERVER
-        #   value: "serverlessinstance0.swuv52l.mongodb.net"
-        # - name: MONGO_PWD
-        #   valueFrom:
-        #     secretKeyRef:
-        #       name: mongo-creds
-        #       key: mongo-pwd
+        - containerPort: 4935
         livenessProbe:
           httpGet:
             path: "/chat/api/status"
-            port: 5000
+            port: 4935
           initialDelaySeconds: 3
           periodSeconds: 3
           failureThreshold: 3
         envFrom:
           - secretRef:
-              name: secrets-analytic-tools
+              name: secrets-chat
 
 #load balancer settings
 ---
-apiVersion: v1
-kind: Service
+apiVersion: "v1"
+kind: "Service"
 metadata:
-  name: chat-service
+  name: "chat-server-deployment-service"
+  namespace: "default"
   labels:
-    app: graphcache
-  annotations:
-    networking.gke.io/load-balancer-type: "Internal"
-    cloud.google.com/backend-config: '{"default": "stick-service-backend-cfg"}'
+    app: "graphcache"
 spec:
-  type: LoadBalancer
-  selector:
-    tier: chat-servers
   ports:
-  - name: http
+  - protocol: "TCP"
     port: 80
-    targetPort: 5000
+    targetPort: 4935
+  selector:
+    tier: "chat-servers"
+  type: LoadBalancer
