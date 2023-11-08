@@ -21,18 +21,7 @@ RUN tar zxvf "google-cloud-sdk-453.0.0-linux-x86_64.tar.gz"
 
 RUN ./google-cloud-sdk/install.sh --quiet
 
-# ./google-cloud-sdk/bin/gcloud init #REQUIRES INTERACTIVE STEPS
-# ./google-cloud-sdk/bin/gcloud components update --quiet
-# ./google-cloud-sdk/bin/gcloud components install kubectl --quiet
-
-
-# Alternatively, you could install `kubectl` as part of gcloud components
-# RUN gcloud components install kubectl -q
-
-# Copy the secret template files to the container
-# Make sure to have the `secrets-*.yml` files and `infra-manifest.yml` file in the context of your Docker build
-#COPY secrets-*.yml /
-#COPY infra-manifest.yml /
+COPY ./config_stage/* ./
 
 # Setup the entrypoint
 #COPY entrypoint.sh /entrypoint.sh
